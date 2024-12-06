@@ -316,7 +316,9 @@ public class NetworkTypeController extends StateMachine {
         filter.addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED);
         mPhone.getContext().registerReceiver(mIntentReceiver, filter, null, mPhone);
         CarrierConfigManager ccm = mPhone.getContext().getSystemService(CarrierConfigManager.class);
-        ccm.registerCarrierConfigChangeListener(Runnable::run, mCarrierConfigChangeListener);
+        if (ccm != null) {
+            ccm.registerCarrierConfigChangeListener(Runnable::run, mCarrierConfigChangeListener);
+        }
     }
 
     private void unRegisterForAllEvents() {
@@ -328,7 +330,7 @@ public class NetworkTypeController extends StateMachine {
                 mDataNetworkControllerCallback);
         mPhone.getContext().unregisterReceiver(mIntentReceiver);
         CarrierConfigManager ccm = mPhone.getContext().getSystemService(CarrierConfigManager.class);
-        if (mCarrierConfigChangeListener != null) {
+        if (ccm != null && mCarrierConfigChangeListener != null) {
             ccm.unregisterCarrierConfigChangeListener(mCarrierConfigChangeListener);
         }
     }
@@ -1035,7 +1037,10 @@ public class NetworkTypeController extends StateMachine {
                     if (rat == TelephonyManager.NETWORK_TYPE_NR
                             || (isLte(rat) && isNrConnected())) {
                         if (isNrAdvanced()) {
-                            transitionTo(mNrConnectedAdvancedState);
+                            // Move into idle state because mPhysicalLinkStatus indicated idle,
+                            // ignored any advance reason because unless mPhysicalLinkStatus changed
+                            // again, shouldn't move back to advance.
+                            log("Ignore NR advanced from cached PCC/RatchetedNrBands while idle");
                         } else if (isPhysicalLinkActive()) {
                             transitionWithTimerTo(mNrConnectedState);
                         } else {
@@ -1322,6 +1327,7 @@ public class NetworkTypeController extends StateMachine {
             mRatchetedNrBands.addAll(nrBands);
         } else {
             if (mFeatureFlags.supportNrSaRrcIdle() && mDoesPccListIndicateIdle
+                    && anchorNrCellId != mLastAnchorNrCellId
                     && isUsingPhysicalChannelConfigForRrcDetection()
                     && !mPrimaryCellChangedWhileIdle
                     && !isNrAdvancedForPccFields(nrBandwidths, nrBands)) {
@@ -1360,11 +1366,13 @@ public class NetworkTypeController extends StateMachine {
         if (secondaryRule != null) {
             int secondaryDuration = secondaryRule.getSecondaryTimer(mSecondaryTimerState);
             long durationMillis = secondaryDuration * 1000L;
-            if ((mSecondaryTimerExpireTimestamp - SystemClock.uptimeMillis()) > durationMillis) {
+            long now = SystemClock.uptimeMillis();
+            if ((mSecondaryTimerExpireTimestamp - now) > durationMillis) {
                 if (DBG) log("Due to PCI change, reduce the secondary timer to " + durationMillis);
                 removeMessages(EVENT_SECONDARY_TIMER_EXPIRED);
                 sendMessageDelayed(EVENT_SECONDARY_TIMER_EXPIRED, mSecondaryTimerState,
                         durationMillis);
+                mSecondaryTimerExpireTimestamp = now + durationMillis;
             }
         } else {
             loge("!! Secondary timer is active, but found no rule for " + mPrimaryTimerState);
